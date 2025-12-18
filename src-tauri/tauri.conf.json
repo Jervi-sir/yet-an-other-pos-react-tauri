@@ -1,8 +1,8 @@
 {
 	"$schema": "https://schema.tauri.app/config/2",
-	"productName": "drizzle-tauri-proxy",
+	"productName": "yet-another-pos",
 	"version": "0.1.0",
-	"identifier": "com.drizzle-tauri-proxy.app",
+	"identifier": "com.yet-another-pos.app",
 	"build": {
 		"beforeDevCommand": "pnpm dev",
 		"devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
 	"app": {
 		"windows": [
 			{
-				"title": "drizzle-tauri-proxy",
+				"title": "yet-another-pos",
 				"width": 800,
 				"height": 600
 			}
@@ -31,11 +31,15 @@
 			"icons/icon.icns",
 			"icons/icon.ico"
 		],
-		"resources": ["migrations/*"]
+		"resources": [
+			"migrations/*"
+		]
 	},
 	"plugins": {
 		"sql": {
-			"preload": ["sqlite:database.db"]
+			"preload": [
+				"sqlite:database.db"
+			]
 		}
 	}
 }

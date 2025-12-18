@@ -17,8 +17,6 @@ This project is a modern fullstack template using:
 1. **Install dependencies**:
 
    ```bash
-   git clone https://github.com/meditto/tauri-drizzle-proxy.git
-   cd tauri-drizzle-proxy
    pnpm install
    ```
 
@@ -44,9 +42,6 @@ This project is a modern fullstack template using:
    pnpm db:generate
    ```
 
-## 📎 Related Links
+## database location
 
-- [Tauri v2 Docs](https://tauri.app/v2/)
-- [Drizzle ORM Docs](https://orm.drizzle.team/)
-- [Tauri Plugin SQL](https://github.com/tauri-apps/plugins-workspace/tree/dev/plugins/sql)
-- [Drizzle ORM SQLite Proxy Issue #4113](https://github.com/drizzle-team/drizzle-orm/issues/4113)
+

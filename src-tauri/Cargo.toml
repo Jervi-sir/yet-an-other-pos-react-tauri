@@ -1,5 +1,5 @@
 [package]
-name = "tauri-drizzle-proxy"
+name = "yet-an-other-pos"
 version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]

@@ -1,0 +1,31 @@
+- login @done
+  - mark login @done
+- create account @done
+- CRUD categories. pagination @done
+  - pagination
+- CRUD Units, pagination @done
+  - pagination
+- Sale history 
+  - filter, 
+  - date
+  - search
+  - filter by cashier
+  - search by barcode
+  - pagination
+- Sold product
+  - filter, 
+  - search
+  - filter by cashier
+  - search by barcode
+  - pagination
+- list customers
+- cashier stats
+  - filter
+  - date
+  - cashier
+  - login logout dates
+  - totals
+- logout
+  - mark logout
+- do tauri
+- see alot of fake data

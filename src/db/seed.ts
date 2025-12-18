@@ -1,63 +1,111 @@
 import { reset } from "drizzle-seed";
 import * as schema from "@/db/schema";
 import db from "./database";
+import { initialCategories, initialCustomers, initialProducts, initialSuppliers, initialUnits, initialUsers } from "@/lib/data";
 
-const users = [
-	{
-		name: "John Doe",
-		email: "johndoe@example.com",
-		age: 30,
-		city: "New York",
-		posts: [
-			{
-				title: "First Post",
-				content: "This is the content of the first post.",
-				comments: [
-					{
-						content: "Great post!"
-					},
-					{
-						content: "Thanks for sharing!"
-					}
-				]
-			}
-		]
-	}
-];
 export default async function seed() {
 	// @ts-ignore
 	await reset(db, schema);
-	for (const user of users) {
-		const [insertedUser] = await db
-			.insert(schema.user)
-			.values({
-				name: user.name,
-				email: user.email,
-				age: user.age,
-				city: user.city
-			})
-			.returning();
-		console.log(
-			`Inserted user: ${insertedUser.name} with ID: ${insertedUser.id}`
-		);
+	console.log('🌱 Seeding database...\n');
 
-		for (const post of user.posts) {
-			const [insertedPost] = await db
-				.insert(schema.post)
-				.values({
-					title: post.title,
-					content: post.content,
-					user_id: insertedUser.id
-				})
-				.returning();
-
-			for (const comment of post.comments) {
-				await db.insert(schema.comment).values({
-					content: comment.content,
-					user_id: insertedUser.id,
-					post_id: insertedPost.id
-				});
+	try {
+		// Users
+		console.log('👤 Seeding users...');
+		for (const user of initialUsers) {
+			try {
+				await db.insert(schema.users).values(user);
+				console.log(`  ✓ Created user: ${user.name} (ID: ${user.id})`);
+			} catch (error: any) {
+				if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+					console.log(`  ⊘ User already exists: ${user.name} (ID: ${user.id})`);
+				} else {
+					throw error;
+				}
 			}
 		}
+
+		// Categories
+		console.log('\n📁 Seeding categories...');
+		for (const cat of initialCategories) {
+			try {
+				await db.insert(schema.productCategories).values(cat);
+				console.log(`  ✓ Created category: ${cat.name} (ID: ${cat.id})`);
+			} catch (error: any) {
+				if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+					console.log(`  ⊘ Category already exists: ${cat.name} (ID: ${cat.id})`);
+				} else {
+					throw error;
+				}
+			}
+		}
+
+		// Units
+		console.log('\n📏 Seeding units...');
+		for (const unit of initialUnits) {
+			try {
+				await db.insert(schema.productUnits).values(unit);
+				console.log(`  ✓ Created unit: ${unit.name} (ID: ${unit.id})`);
+			} catch (error: any) {
+				if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+					console.log(`  ⊘ Unit already exists: ${unit.name} (ID: ${unit.id})`);
+				} else {
+					throw error;
+				}
+			}
+		}
+
+		// Products
+		console.log('\n📦 Seeding products...');
+		for (const prod of initialProducts) {
+			try {
+				await db.insert(schema.products).values(prod);
+				console.log(`  ✓ Created product: ${prod.name} (ID: ${prod.id})`);
+			} catch (error: any) {
+				if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+					console.log(`  ⊘ Product already exists: ${prod.name} (ID: ${prod.id})`);
+				} else {
+					throw error;
+				}
+			}
+		}
+
+		// Customers
+		console.log('\n👥 Seeding customers...');
+		for (const cust of initialCustomers) {
+			try {
+				await db.insert(schema.customers).values(cust);
+				console.log(`  ✓ Created customer: ${cust.name} (ID: ${cust.id})`);
+			} catch (error: any) {
+				if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+					console.log(`  ⊘ Customer already exists: ${cust.name} (ID: ${cust.id})`);
+				} else {
+					throw error;
+				}
+			}
+		}
+
+		// Suppliers
+		console.log('\n🏭 Seeding suppliers...');
+		for (const sup of initialSuppliers) {
+			try {
+				await db.insert(schema.suppliers).values(sup);
+				console.log(`  ✓ Created supplier: ${sup.name} (ID: ${sup.id})`);
+			} catch (error: any) {
+				if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+					console.log(`  ⊘ Supplier already exists: ${sup.name} (ID: ${sup.id})`);
+				} else {
+					throw error;
+				}
+			}
+		}
+
+
+		console.log('\n✅ Seeding completed successfully!');
+		// process.exit(0);
+	} catch (error) {
+		console.error('\n❌ Error seeding:', error);
+		throw error;
+		// process.exit(1);
 	}
+
 }
