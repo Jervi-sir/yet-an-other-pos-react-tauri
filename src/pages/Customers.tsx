@@ -1,6 +1,9 @@
 import { useState, useEffect } from "react";
 // import { useStore } from "@/context/StoreContext"; 
-import { DataTable } from "@/components/DataTable";
+import db from "@/db/database";
+import { customers as customersTable } from "@/db/schema";
+import { eq } from "drizzle-orm";
+import { DataTable } from "@/components/data-table";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { Customer } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -23,8 +26,13 @@ export default function CustomersPage() {
   // Local form state
   const [formData, setFormData] = useState<Partial<Customer>>({});
 
-  const fetchCustomers = () => {
-    fetch('http://localhost:3000/api/customers').then(r => r.json()).then(setCustomers).catch(console.error);
+  const fetchCustomers = async () => {
+    try {
+      const result = await db.select().from(customersTable);
+      setCustomers(result as Customer[]);
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   useEffect(() => {
@@ -48,21 +56,22 @@ export default function CustomersPage() {
     // valid
     const custData = formData as Customer;
 
-    const url = editingCustomer
-      ? `http://localhost:3000/api/customers/${editingCustomer.id}`
-      : `http://localhost:3000/api/customers`;
-    const method = editingCustomer ? 'PUT' : 'POST';
-
     try {
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(custData)
-      });
-      if (res.ok) {
-        fetchCustomers();
-        setIsDialogOpen(false);
+      if (editingCustomer) {
+        await db.update(customersTable)
+          .set(custData)
+          .where(eq(customersTable.id, editingCustomer.id));
+      } else {
+        await db.insert(customersTable).values({
+          name: custData.name,
+          email: custData.email,
+          phone: custData.phone,
+          address: custData.address,
+          tax_number: custData.tax_number,
+        });
       }
+      fetchCustomers();
+      setIsDialogOpen(false);
     } catch (e) {
       console.error("Failed to save customer", e);
     }

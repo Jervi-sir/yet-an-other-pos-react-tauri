@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import db from "@/db/database";
+import { sales, saleLines, products, customers, productCategories } from "@/db/schema";
+import { eq, sql, and, desc } from "drizzle-orm";
 import {
   Card,
   CardContent,
@@ -50,22 +53,99 @@ export default function Dashboard() {
   });
 
   const fetchStats = async () => {
-    let url = "http://localhost:3000/api/stats/dashboard";
-    if (dateRange?.from) {
-      const params = new URLSearchParams();
-      params.append("start", dateRange.from.toISOString());
-      if (dateRange.to) {
-        params.append("end", dateRange.to.toISOString());
-      }
-      url += `?${params.toString()}`;
-    }
-
     try {
-      const res = await fetch(url);
-      const data = await res.json();
-      setStats(data);
+      const start = dateRange?.from?.toISOString();
+      const end = dateRange?.to?.toISOString();
+
+      // Base filter for sales
+      const conditions = [eq(sales.status, 'completed')];
+      if (start) conditions.push(sql`${sales.created_at} >= ${start}`);
+      if (end) conditions.push(sql`${sales.created_at} <= ${end}`);
+
+      const salesWhere = and(...conditions);
+
+      // 1. Summary Cards (Revenue and Sales Count depend on filter)
+      const totalRevenueResult = await db.select({ value: sql<number>`sum(${sales.grand_total})` })
+        .from(sales).where(salesWhere);
+      const totalRevenue = totalRevenueResult[0]?.value || 0;
+
+      const totalSalesResult = await db.select({ value: sql<number>`count(*)` })
+        .from(sales).where(salesWhere);
+      const totalSales = totalSalesResult[0]?.value || 0;
+
+      // Static counts (Total database size)
+      const totalProductsResult = await db.select({ value: sql<number>`count(*)` }).from(products);
+      const totalProducts = totalProductsResult[0]?.value || 0;
+
+      const totalCustomersResult = await db.select({ value: sql<number>`count(*)` }).from(customers);
+      const totalCustomers = totalCustomersResult[0]?.value || 0;
+
+      // 2. Sales Over Time
+      const salesOverTime = await db.select({
+        date: sql<string>`substr(${sales.created_at}, 1, 10)`,
+        revenue: sql<number>`sum(${sales.grand_total})`
+      })
+        .from(sales)
+        .where(salesWhere)
+        .groupBy(sql`substr(${sales.created_at}, 1, 10)`)
+        .orderBy(sql`substr(${sales.created_at}, 1, 10)`);
+
+      // 3. Sales By Hour (Distribution 00-23)
+      // This answers "stats of sales on each hour of the day"
+      const salesByHour = await db.select({
+        hour: sql<string>`strftime('%H', ${sales.created_at})`,
+        value: sql<number>`sum(${sales.grand_total})`
+      })
+        .from(sales)
+        .where(salesWhere)
+        .groupBy(sql`strftime('%H', ${sales.created_at})`)
+        .orderBy(sql`strftime('%H', ${sales.created_at})`);
+
+      // 4. Top Products
+      const topProducts = await db.select({
+        name: saleLines.product_name,
+        value: sql<number>`sum(${saleLines.line_total})`
+      })
+        .from(saleLines)
+        .leftJoin(sales, eq(saleLines.sale_id, sales.id))
+        .where(salesWhere)
+        .groupBy(saleLines.product_name)
+        .orderBy(desc(sql`sum(${saleLines.line_total})`))
+        .limit(5);
+
+      // 5. Sales by Category
+      const salesByCategory = await db.select({
+        name: productCategories.name,
+        value: sql<number>`sum(${saleLines.line_total})`
+      })
+        .from(saleLines)
+        .leftJoin(products, eq(saleLines.product_id, products.id))
+        .leftJoin(productCategories, eq(products.category_id, productCategories.id))
+        .leftJoin(sales, eq(saleLines.sale_id, sales.id))
+        .where(and(
+          sql`${productCategories.name} IS NOT NULL`,
+          salesWhere
+        ))
+        .groupBy(productCategories.name);
+
+      setStats({
+        summary: {
+          totalRevenue,
+          totalSales,
+          totalProducts,
+          totalCustomers
+        },
+        salesOverTime,
+        salesByHour,
+        topProducts,
+        salesByCategory: salesByCategory.map(item => ({
+          ...item,
+          name: item.name || 'Unknown'
+        }))
+      });
+
     } catch (e) {
-      console.error(e);
+      console.error('Error in stats:', e);
     }
   };
 

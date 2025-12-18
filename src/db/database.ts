@@ -9,9 +9,20 @@ type Row = {
 const db = drizzle(
 	async (sql, params, method) => {
 		try {
+			const start = performance.now();
 			const rows = await invoke<Row[]>("run_sql", {
 				query: { sql, params }
 			});
+			const end = performance.now();
+			const duration = end - start;
+
+			// Log queries, highlighting slow ones (>50ms)
+			if (duration > 50) {
+				console.warn(`[Slow Query] ${duration.toFixed(1)}ms: ${sql}`);
+			} else {
+				// console.debug(`[Query] ${duration.toFixed(1)}ms`);
+			}
+
 			if (rows.length === 0 && method === "get") {
 				/**
 				 * 🛠 Workaround for Drizzle ORM SQLite Proxy `.get()` bug

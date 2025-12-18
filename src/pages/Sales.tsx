@@ -1,8 +1,7 @@
-
 import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth";
 import type { Sale, User, Customer, SaleLine } from "@/types";
-import { DataTable } from "@/components/DataTable";
+import { DataTable } from "@/components/data-table";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +13,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import db from "@/db/database";
+import { sales as salesTable, saleLines, users as usersTable, customers as customersTable } from "@/db/schema";
+import { eq, sql, desc, and, like } from "drizzle-orm";
 
 export default function SalesPage() {
   const currentUser = useAuth();
@@ -38,6 +40,7 @@ export default function SalesPage() {
   const [filterDate, setFilterDate] = useState("");
   const [filterUser, setFilterUser] = useState<number | "all">(isCashier && currentUser ? currentUser.id : "all");
   const [filterSearch, setFilterSearch] = useState("");
+  const [activeSearchTerm, setActiveSearchTerm] = useState("");
 
   // Init User Filter correctly if cashier
   useEffect(() => {
@@ -48,38 +51,70 @@ export default function SalesPage() {
 
   // Fetch Metadata (Users, Customers) - Once
   useEffect(() => {
-    Promise.all([
-      fetch('http://localhost:3000/api/users').then(r => r.json()),
-      fetch('http://localhost:3000/api/customers').then(r => r.json())
-    ]).then(([u, c]) => {
-      setUsers(u);
-      setCustomers(c);
-    }).catch(console.error);
+    const loadMetadata = async () => {
+      try {
+        const [u, c] = await Promise.all([
+          db.select().from(usersTable),
+          db.select().from(customersTable)
+        ]);
+        setUsers(u.map(us => ({ ...us, email: us.email || undefined, role: us.role as any })));
+        setCustomers(c.map(cu => ({
+          ...cu,
+          email: cu.email || "",
+          phone: cu.phone || "",
+          address: cu.address || "",
+          tax_number: cu.tax_number || ""
+        })));
+      } catch (e) {
+        console.error(e);
+      }
+    };
+    loadMetadata();
   }, []);
 
   // Fetch Sales (Paginated)
   const fetchSales = async () => {
     setIsLoading(true);
     try {
-      const params = new URLSearchParams({
-        page: page.toString(),
-        limit: limit.toString(),
-      });
+      const pageNum = page;
+      const limitNum = limit;
+      const offset = (pageNum - 1) * limitNum;
 
-      if (filterDate) params.append('date', filterDate);
-      if (filterUser !== 'all') params.append('user_id', filterUser.toString());
-      if (filterSearch) params.append('search', filterSearch);
+      // Base query
+      let query = db.select().from(salesTable);
+      let countQuery = db.select({ count: sql<number>`count(*)` }).from(salesTable);
 
-      const res = await fetch(`http://localhost:3000/api/sales?${params}`);
-      const data = await res.json();
+      const conditions = [];
 
-      if (data.pagination) {
-        setSales(data.data);
-        setTotalPages(data.pagination.totalPages);
-        setTotalSales(data.pagination.total);
-      } else {
-        setSales(Array.isArray(data) ? data : []);
+      if (filterDate) {
+        conditions.push(sql`substr(${salesTable.created_at}, 1, 10) = ${filterDate}`);
       }
+
+      if (filterUser && filterUser !== 'all') {
+        conditions.push(eq(salesTable.created_by_user_id, Number(filterUser)));
+      }
+
+      if (activeSearchTerm) {
+        const term = `%${activeSearchTerm}%`;
+        conditions.push(like(salesTable.document_number, term));
+      }
+
+      const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+      // @ts-ignore
+      const data = await query.where(whereClause)
+        .orderBy(desc(salesTable.created_at))
+        .limit(limitNum)
+        .offset(offset);
+
+      // @ts-ignore
+      const countRes = await countQuery.where(whereClause);
+      const total = countRes[0].count;
+
+      setSales(data as Sale[]);
+      setTotalPages(Math.ceil(total / limitNum));
+      setTotalSales(total);
+
     } catch (e) {
       console.error(e);
     } finally {
@@ -87,23 +122,9 @@ export default function SalesPage() {
     }
   };
 
-  // Fetch on Page or Filter Change (Effect is cleaner than manual calls for pagination)
-  // But for search text, we want manual trigger? 
-  // Code instructs: "Update Search input to trigger fetch (on Enter or Search button)".
-  // But Date/User filters are usually immediate.
-  // I'll assume "filterSearch" is the live input, let's separate `activeSearch`.
-  // Actually, let's keep it simple: Date/User trigger effect. Search term triggers on button/enter.
-
-  // WAIT: To support explicit Search trigger, I need a separate state variable `activeSearchTerm`.
-  // And `filterDate` / `filterUser` can toggle immediately.
-
-  const [activeSearchTerm, setActiveSearchTerm] = useState("");
-
   useEffect(() => {
     fetchSales();
   }, [page, filterDate, filterUser, activeSearchTerm]);
-  // Note: changing filters should probably reset page to 1. 
-  // I'll handle that in the handlers.
 
   const handleSearch = () => {
     setPage(1);
@@ -124,8 +145,7 @@ export default function SalesPage() {
     setSelectedSale(sale);
     setSelectedSaleLines([]); // Clear previous
     try {
-      const res = await fetch(`http://localhost:3000/api/sale-lines?sale_id=${sale.id}`);
-      const lines = await res.json();
+      const lines = await db.select().from(saleLines).where(eq(saleLines.sale_id, sale.id));
       setSelectedSaleLines(lines);
     } catch (e) {
       console.error(e);

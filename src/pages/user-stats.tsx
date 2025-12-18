@@ -1,4 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
+import db from "@/db/database";
+import { users as usersTable, sales, cashSessions, saleLines, products as productsTable } from "@/db/schema";
 // import { useStore } from "@/context/StoreContext";
 import type { User, Sale, CashSession, SaleLine, Product } from "@/types";
 import { format } from "date-fns";
@@ -34,19 +36,35 @@ export default function UserStatsPage() {
   const [products, setProducts] = useState<Product[]>([]);
 
   useEffect(() => {
-    Promise.all([
-      fetch('http://localhost:3000/api/users').then(r => r.json()),
-      fetch('http://localhost:3000/api/sales').then(r => r.json()),
-      fetch('http://localhost:3000/api/sessions').then(r => r.json()),
-      fetch('http://localhost:3000/api/sale-lines').then(r => r.json()),
-      fetch('http://localhost:3000/api/products').then(r => r.json())
-    ]).then(([u, s, sess, sl, p]) => {
-      setUsers(u);
-      setSales(s);
-      setSessions(sess);
-      setSaleLines(sl);
-      setProducts(p);
-    }).catch(console.error);
+    const loadData = async () => {
+      try {
+        const [u, s, sess, sl, p] = await Promise.all([
+          db.select().from(usersTable),
+          db.select().from(sales),
+          db.select().from(cashSessions),
+          db.select().from(saleLines),
+          db.select().from(productsTable)
+        ]);
+
+        setUsers(u.map(us => ({ ...us, email: us.email || undefined, role: us.role as any })));
+        setSales(s as unknown as Sale[]);
+        setSessions(sess.map(se => ({
+          ...se,
+          email: se.email || undefined,
+          end_time: se.end_time || undefined,
+          expected_cash_balance: se.expected_cash_balance || undefined,
+          actual_cash_balance: se.actual_cash_balance || undefined,
+          difference: se.difference || undefined,
+          role: se.role as any,
+          status: se.status as any
+        })));
+        setSaleLines(sl as unknown as SaleLine[]);
+        setProducts(p as unknown as Product[]);
+      } catch (error) {
+        console.error(error);
+      }
+    };
+    loadData();
   }, []);
 
   // Filter States

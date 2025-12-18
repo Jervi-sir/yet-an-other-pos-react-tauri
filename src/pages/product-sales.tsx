@@ -1,7 +1,10 @@
 import { useState, useEffect } from "react";
 import { useAuth } from "@/lib/auth";
 import type { User } from "@/types";
-import { DataTable } from "@/components/DataTable";
+import db from "@/db/database";
+import { saleLines, sales, users as usersTable } from "@/db/schema";
+import { eq, sql, and, or, desc } from "drizzle-orm";
+import { DataTable } from "@/components/data-table";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,9 +48,15 @@ export default function ProductSalesPage() {
     }
   }, [currentUser, isCashier]);
 
-  // Fetch Metadata
+  // Fetch Metadata (Users)
   useEffect(() => {
-    fetch('http://localhost:3000/api/users').then(r => r.json()).then(setUsers).catch(console.error);
+    const loadUsers = async () => {
+      try {
+        const res = await db.select().from(usersTable);
+        setUsers(res.map(u => ({ ...u, email: u.email || undefined, role: u.role as any })));
+      } catch (e) { console.error(e); }
+    };
+    loadUsers();
   }, []);
 
   const getUserName = (id: number) => {
@@ -57,43 +66,82 @@ export default function ProductSalesPage() {
   const fetchSoldProducts = async () => {
     setIsLoading(true);
     try {
-      const params = new URLSearchParams({
-        page: page.toString(),
-        limit: limit.toString(),
-      });
+      const pageNum = page;
+      const limitNum = limit;
+      const offset = (pageNum - 1) * limitNum;
 
-      if (filterDate) params.append('date', filterDate);
-      if (filterUser !== 'all') params.append('user_id', filterUser.toString());
-      if (activeSearchTerm) params.append('search', activeSearchTerm);
+      // Base query
+      let query = db.select({
+        id: saleLines.id,
+        sale_id: saleLines.sale_id,
+        product_id: saleLines.product_id,
+        product_name: saleLines.product_name,
+        qty: saleLines.qty,
+        unit_price: saleLines.unit_price,
+        discount: saleLines.discount,
+        tax_rate: saleLines.tax_rate,
+        line_total: saleLines.line_total,
+        // Joined fields for display/filtering
+        document_number: sales.document_number,
+        created_at: sales.created_at,
+        created_by_user_id: sales.created_by_user_id
+      })
+        .from(saleLines)
+        .leftJoin(sales, eq(saleLines.sale_id, sales.id));
 
-      const res = await fetch(`http://localhost:3000/api/sale-lines?${params}`);
-      const responseData = await res.json();
+      const conditions = [];
 
-      if (responseData.pagination) {
-        // Map API response to Row format
-        const rows: SoldProductRow[] = responseData.data.map((item: any) => ({
-          id: item.id,
-          date: item.created_at,
-          product_name: item.product_name,
-          qty: item.qty,
-          unit_price: item.unit_price,
-          total: item.line_total,
-          cashier: getUserName(item.created_by_user_id), // User might need to be fetched first?
-          // If users list is empty initially, this might show "Unknown" until re-render.
-          // Since users fetch is fast and usually cached/small, it's ok.
-          // Or we can rely on re-render when `users` state updates.
-          document_number: item.document_number,
-          user_id: item.created_by_user_id
-        }));
-
-        setData(rows);
-        setTotalPages(responseData.pagination.totalPages);
-        setTotalRecords(responseData.pagination.total);
-      } else {
-        setData([]);
+      if (filterDate) {
+        conditions.push(sql`substr(${sales.created_at}, 1, 10) = ${filterDate}`);
       }
+
+      if (filterUser && filterUser !== 'all') {
+        conditions.push(eq(sales.created_by_user_id, Number(filterUser)));
+      }
+
+      if (activeSearchTerm) {
+        const term = `%${activeSearchTerm.toLowerCase()}%`;
+        conditions.push(or(
+          sql`lower(${saleLines.product_name}) LIKE ${term}`,
+          sql`lower(${sales.document_number}) LIKE ${term}`
+        ));
+      }
+
+      const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+      // Data query
+      const result = await query.where(whereClause)
+        .orderBy(desc(sales.created_at))
+        .limit(limitNum)
+        .offset(offset);
+
+      // Count query
+      const countRes = await db.select({ count: sql<number>`count(*)` })
+        .from(saleLines)
+        .leftJoin(sales, eq(saleLines.sale_id, sales.id))
+        .where(whereClause);
+
+      const total = countRes[0].count;
+
+      const rows: SoldProductRow[] = result.map((item) => ({
+        id: item.id,
+        date: item.created_at || '',
+        product_name: item.product_name,
+        qty: item.qty,
+        unit_price: item.unit_price,
+        total: item.line_total,
+        cashier: getUserName(item.created_by_user_id || 0),
+        document_number: item.document_number || '',
+        user_id: item.created_by_user_id || 0
+      }));
+
+      setData(rows);
+      setTotalPages(Math.ceil(total / limitNum) || 1);
+      setTotalRecords(total);
+
     } catch (e) {
       console.error(e);
+      setData([]);
     } finally {
       setIsLoading(false);
     }

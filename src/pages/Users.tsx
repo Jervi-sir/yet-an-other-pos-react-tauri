@@ -1,12 +1,15 @@
 import { useState, useEffect } from "react";
-import { DataTable } from "@/components/DataTable";
+import db from "@/db/database";
+import { users as usersTable } from "@/db/schema";
+import { eq } from "drizzle-orm";
+import { DataTable } from "@/components/data-table";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { User } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Plus, Edit, Trash2 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { UserForm } from "@/components/users/UserForm";
+import { UserForm } from "@/components/users/user-form";
 import { useAuth } from "@/lib/auth";
 
 export default function UsersPage() {
@@ -16,11 +19,20 @@ export default function UsersPage() {
   // Only admin should fully access this, sidebar handles navigation security but we can render conditionally too
   const isAdmin = currentUser?.role === 'admin';
 
-  const fetchUsers = () => {
-    fetch('http://localhost:3000/api/users')
-      .then(r => r.json())
-      .then(setUsers)
-      .catch(console.error);
+  const fetchUsers = async () => {
+    try {
+      const result = await db.select().from(usersTable);
+
+      const appUsers: User[] = result.map(u => ({
+        ...u,
+        email: u.email || undefined,
+        role: u.role as any
+      }));
+
+      setUsers(appUsers);
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   useEffect(() => {
@@ -39,16 +51,11 @@ export default function UsersPage() {
     if (!confirm('Are you sure you want to delete this user?')) return;
 
     try {
-      const res = await fetch(`http://localhost:3000/api/users/${id}`, {
-        method: 'DELETE'
-      });
-      if (res.ok) {
-        fetchUsers();
-      } else {
-        alert('Failed to delete');
-      }
+      await db.delete(usersTable).where(eq(usersTable.id, id));
+      fetchUsers();
     } catch (e) {
       console.error(e);
+      alert('Failed to delete user');
     }
   };
 

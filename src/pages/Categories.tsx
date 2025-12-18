@@ -1,6 +1,9 @@
 import { useState, useEffect } from "react";
+import db from "@/db/database";
+import { productCategories, products } from "@/db/schema";
+import { eq, sql } from "drizzle-orm";
 // import { useStore } from "@/context/StoreContext"; // Removed
-import { DataTable } from "@/components/DataTable";
+import { DataTable } from "@/components/data-table";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { ProductCategory } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -11,16 +14,28 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { CategoryForm } from "@/components/categories/CategoryForm";
+import { CategoryForm } from "@/components/categories/category-form";
 
 export default function CategoriesPage() {
   const [categories, setCategories] = useState<ProductCategory[]>([]);
 
-  const fetchCategories = () => {
-    fetch('http://localhost:3000/api/categories')
-      .then(res => res.json())
-      .then(setCategories)
-      .catch(console.error);
+  const fetchCategories = async () => {
+    try {
+      const result = await db.select({
+        id: productCategories.id,
+        name: productCategories.name,
+        // Drizzle doesn't automatically count relations easily in one go without raw sql or subqueries usually.
+        // For now let's just fetch raw categories or use a left join + count grouping if needed by the UI.
+        // The UI column uses `product_count`.
+        // Let's implement a subquery for product count.
+        product_count: sql<number>`(SELECT count(*) FROM ${products} WHERE ${products.category_id} = ${productCategories.id})`
+      })
+        .from(productCategories);
+
+      setCategories(result);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   useEffect(() => {
@@ -39,19 +54,15 @@ export default function CategoriesPage() {
     if (!confirm('Are you sure you want to delete this category?')) return;
 
     try {
-      const res = await fetch(`http://localhost:3000/api/categories/${id}`, {
-        method: 'DELETE'
-      });
+      // Check if used? The UI already checks product_count before showing delete button usually.
+      // But safety check:
+      // We can rely on foreign key constraints if set, but Drizzle/SQLite might need explicit check or handle error.
 
-      if (res.ok) {
-        fetchCategories();
-      } else {
-        const error = await res.json();
-        alert(error.error || 'Failed to delete');
-      }
+      await db.delete(productCategories).where(eq(productCategories.id, id));
+      fetchCategories();
     } catch (e) {
       console.error(e);
-      alert('Failed to connect to server');
+      alert('Failed to delete. It might be in use.');
     }
   };
 

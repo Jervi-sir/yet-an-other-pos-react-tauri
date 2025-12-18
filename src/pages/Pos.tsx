@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-// import { useStore } from "@/context/StoreContext"; // Removed
 import { useAuth, getSession, setSession, removeSession, removeUser } from "@/lib/auth";
 import type { Product, SaleLine, Customer, Sale, CashSession } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -7,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Plus, Minus, Trash2, User as UserIcon, ScanBarcode, Search, LogOut, History, FileText, Calculator } from "lucide-react";
-import { PaymentDialog } from "@/components/pos/PaymentDialog";
+import { PaymentDialog } from "@/components/pos/payment-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Label } from "@/components/ui/label";
 import {
@@ -27,6 +26,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
+// Drizzle Imports
+import db from "@/db/database";
+import { sales as salesTable, saleLines as saleLinesTable, salePayments as salePaymentsTable, products as productsTable, customers as customersTable, cashSessions as cashSessionsTable } from "@/db/schema";
+import { eq, desc, and, sql } from "drizzle-orm";
+
 interface CartItem extends Omit<SaleLine, 'id' | 'sale_id'> {
   product_id: number | null; // number for real products, null for custom
   ui_id: string; // Temporary UI ID
@@ -44,41 +48,53 @@ export default function PosPage() {
   const startSession = async () => {
     if (!currentUser) return;
     try {
-      const res = await fetch(`${API_URL}/sessions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: currentUser.id,
-          start_time: new Date().toISOString(),
-          opening_balance: 0,
-          status: 'open',
-        })
-      });
-      if (res.ok) {
-        updateSession(await res.json());
+      // Check for existing open session for this user
+      const existing = await db.select().from(cashSessionsTable)
+        .where(and(eq(cashSessionsTable.user_id, currentUser.id), eq(cashSessionsTable.status, 'open')))
+        .limit(1);
+
+      if (existing.length > 0) {
+        updateSession(existing[0]);
+        return;
       }
-    } catch (e) { console.error("Start session failed", e); }
+
+      // Create new session
+      const [newSession] = await db.insert(cashSessionsTable).values({
+        user_id: currentUser.id,
+        start_time: new Date().toISOString(),
+        opening_balance: 0,
+        status: 'open',
+      }).returning();
+
+      if (newSession) {
+        updateSession(newSession);
+      }
+    } catch (e) {
+      console.error("Start session failed", e);
+    }
   };
 
   const closeSession = async (sessionId: number) => {
     try {
-      await fetch(`${API_URL}/sessions/${sessionId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      await db.update(cashSessionsTable)
+        .set({
           end_time: new Date().toISOString(),
           status: 'closed',
         })
-      });
+        .where(eq(cashSessionsTable.id, sessionId));
+
       removeSession();
       setCurrentSessionState(null);
-    } catch (e) { console.error("Close session failed", e); }
+    } catch (e) {
+      console.error("Close session failed", e);
+    }
   };
 
   const logout = () => {
     removeUser();
     window.location.href = '/login';
   };
+
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
@@ -100,18 +116,26 @@ export default function PosPage() {
 
   const [customerSearch, setCustomerSearch] = useState("");
 
-  const API_URL = 'http://localhost:3000/api';
-
   useEffect(() => {
     // Fetch Products & Customers on mount
     const fetchData = async () => {
       try {
         const [pRes, cRes] = await Promise.all([
-          fetch(`${API_URL}/products`),
-          fetch(`${API_URL}/customers`)
+          db.select().from(productsTable),
+          db.select().from(customersTable) // .where(eq(customersTable.is_active, true)) // if you had is_active
         ]);
-        if (pRes.ok) setProducts(await pRes.json());
-        if (cRes.ok) setCustomers(await cRes.json());
+
+        setProducts(pRes as Product[]);
+
+        // Map customers to handle nulls
+        setCustomers(cRes.map(c => ({
+          ...c,
+          email: c.email || "",
+          phone: c.phone || "",
+          address: c.address || "",
+          tax_number: c.tax_number || ""
+        })) as Customer[]);
+
       } catch (e) {
         console.error("Failed to load POS data", e);
       }
@@ -121,32 +145,75 @@ export default function PosPage() {
 
   useEffect(() => {
     if (isHistoryOpen) {
-      fetch(`${API_URL}/sales`).then(r => r.json()).then(setSales).catch(console.error);
+      fetchHistory();
     }
   }, [isHistoryOpen]);
+
+  const fetchHistory = async () => {
+    try {
+      const res = await db.select().from(salesTable).orderBy(desc(salesTable.created_at)).limit(50);
+      setSales(res as Sale[]);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   // Initial Session Check
   useEffect(() => {
     if (currentUser && !currentSession) {
       startSession();
     }
-  }, [currentUser, currentSession, startSession]);
+  }, [currentUser, currentSession]); // Removed startSession from dep array to avoid infinite loop
 
-  const addSale = async (sale: any, lines: any[], payments: any[]) => {
+  const processSale = async (
+    saleData: Omit<Sale, 'id'>,
+    linesData: Omit<SaleLine, 'id' | 'sale_id'>[],
+    paymentData: any
+  ) => {
     try {
-      const res = await fetch(`${API_URL}/sales`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sale, lines, payments })
-      });
-      if (res.ok) {
-        // Refresh sales if history is open, or just let it refresh next time it opens
-        if (isHistoryOpen) {
-          fetch(`${API_URL}/sales`).then(r => r.json()).then(setSales).catch(console.error);
+      await db.transaction(async (tx) => {
+        // 1. Insert Sale
+        // @ts-ignore - types mismatch with returning sometimes
+        const [saleRes] = await tx.insert(salesTable).values(saleData).returning({ id: salesTable.id });
+        const saleId = saleRes.id;
+
+        // 2. Insert Lines & Update Stock
+        for (const line of linesData) {
+          await tx.insert(saleLinesTable).values({
+            ...line,
+            sale_id: saleId,
+            product_name: line.product_name, // Explicitly ensure fields match
+          });
+
+          // Update stock quantity for tracked products
+          if (line.product_id) {
+            await tx.update(productsTable)
+              .set({
+                stock_quantity: sql`${productsTable.stock_quantity} - ${line.qty}`
+              })
+              .where(eq(productsTable.id, line.product_id));
+          }
         }
+
+        // 3. Insert Payment
+        await tx.insert(salePaymentsTable).values({
+          ...paymentData,
+          sale_id: saleId
+        });
+      });
+
+      // Refresh local product stock state
+      const updatedProducts = await db.select().from(productsTable);
+      setProducts(updatedProducts as Product[]);
+
+      // Refresh history if open
+      if (isHistoryOpen) {
+        fetchHistory();
       }
+
     } catch (e) {
       console.error("Failed to submit sale", e);
+      throw e; // Re-throw to handle UI feedback if needed
     }
   };
 
@@ -278,10 +345,11 @@ export default function PosPage() {
 
   // --- Checkout ---
 
-  const handleCheckout = (method: string, paidAmount: number) => {
+  const handleCheckout = async (method: string, paidAmount: number) => {
     if (!currentUser) return;
 
-    // We don't generate IDs here anymore. Backend handles it.
+    // Prepare Sale Data
+    // We don't need 'id' as it's auto-increment
     const saleData = {
       document_number: `WS-${Date.now()}`,
       type: 'pos_receipt' as const,
@@ -299,8 +367,7 @@ export default function PosPage() {
       cash_session_id: currentSession?.id,
     };
 
-    // Lines without sale_id (backend adds it)
-    // We strip ui_id before sending
+    // Prepare Lines Data (strip ui_id)
     const linesData = cart.map(({ ui_id, ...rest }) => ({
       ...rest,
     }));
@@ -312,17 +379,21 @@ export default function PosPage() {
       reference: method === 'cash' ? undefined : 'External'
     };
 
-    addSale(saleData, linesData, [paymentData]);
+    try {
+      await processSale(saleData, linesData, paymentData);
 
-    // Success Loop
-    setCart([]);
-    setSelectedCustomerId(null);
-    setIsPayOpen(false);
+      // Success Loop
+      setCart([]);
+      setSelectedCustomerId(null);
+      setIsPayOpen(false);
 
-    // Simulate Receipt Print (optional toast or persistent log)
-    console.log("Printing receipt for sale:", saleData.document_number);
+      // Simulate Receipt Print (optional toast or persistent log)
+      console.log("Printing receipt for sale:", saleData.document_number);
 
-    setTimeout(() => inputRef.current?.focus(), 100);
+      setTimeout(() => inputRef.current?.focus(), 100);
+    } catch (e) {
+      alert("Error processing sale. Check console.");
+    }
   };
 
   const handleLogout = async () => {
@@ -340,11 +411,12 @@ export default function PosPage() {
     c.phone.includes(customerSearch)
   );
 
-  // Sorted History Data
-  const recentSales = [...sales].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  // Sorted History Data (Local or Fetched)
+  // `sales` state is updated by fetchHistory
+  const recentSales = sales;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-100px)] gap-4">
+    <div className="flex flex-col gap-4">
 
       {/* Header Bar */}
       <div className="flex justify-between items-center bg-card p-2 rounded-md border text-sm shadow-sm">

@@ -1,6 +1,8 @@
-
 import { useState, useEffect } from "react";
-import { DataTable } from "@/components/DataTable";
+import db from "@/db/database";
+import { products as productsTable, productCategories, productUnits } from "@/db/schema";
+import { sql, or, and } from "drizzle-orm";
+import { DataTable } from "@/components/data-table";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { Product, ProductCategory, ProductUnit } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -12,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ProductForm } from "@/components/products/ProductForm";
+import { ProductForm } from "@/components/products/product-form";
 import { Badge } from "@/components/ui/badge";
 
 export default function ProductsPage() {
@@ -35,22 +37,36 @@ export default function ProductsPage() {
   const fetchProducts = async () => {
     setIsLoading(true);
     try {
-      const params = new URLSearchParams({
-        page: page.toString(),
-        limit: limit.toString(),
-        search: searchTerm
-      });
-      const res = await fetch(`http://localhost:3000/api/products?${params}`);
-      const data = await res.json();
+      const pageNum = page;
+      const limitNum = limit;
+      const offset = (pageNum - 1) * limitNum;
 
-      if (data.pagination) {
-        setProducts(data.data);
-        setTotalPages(data.pagination.totalPages);
-        setTotalProducts(data.pagination.total);
-      } else {
-        // Fallback for non-paginated response (if API reverts)
-        setProducts(Array.isArray(data) ? data : []);
+      // Base query
+      let query = db.select().from(productsTable);
+      let countQuery = db.select({ count: sql<number>`count(*)` }).from(productsTable);
+
+      const conditions = [];
+
+      if (searchTerm) {
+        const term = `%${searchTerm.toLowerCase()}%`;
+        conditions.push(or(
+          sql`lower(${productsTable.name}) LIKE ${term}`,
+          sql`lower(${productsTable.barcode}) LIKE ${term}`
+        ));
       }
+
+      const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+      // @ts-ignore
+      const data = await query.where(whereClause).limit(limitNum).offset(offset);
+      // @ts-ignore
+      const totalResult = await countQuery.where(whereClause);
+      const total = totalResult[0].count;
+
+      setProducts(data as Product[]);
+      setTotalPages(Math.ceil(total / limitNum));
+      setTotalProducts(total);
+
     } catch (e) {
       console.error(e);
     } finally {
@@ -60,8 +76,20 @@ export default function ProductsPage() {
 
   const fetchMetadata = async () => {
     try {
-      fetch('http://localhost:3000/api/categories').then(r => r.json()).then(setCategories);
-      fetch('http://localhost:3000/api/units').then(r => r.json()).then(setUnits);
+      const [cats, uns] = await Promise.all([
+        db.select({
+          id: productCategories.id,
+          name: productCategories.name,
+          parent_id: productCategories.parent_id
+        }).from(productCategories),
+        db.select({
+          id: productUnits.id,
+          name: productUnits.name,
+          short_code: productUnits.short_code
+        }).from(productUnits)
+      ]);
+      setCategories(cats as ProductCategory[]);
+      setUnits(uns as ProductUnit[]);
     } catch (e) {
       console.error(e);
     }

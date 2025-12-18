@@ -1,15 +1,16 @@
 import { useState } from 'react';
-// import { useStore } from '@/context/StoreContext'; // Removed
-import seed from '@/db/seed';
+import { useNavigate } from 'react-router-dom';
+import { eq } from 'drizzle-orm';
+import db from '@/db/database';
+import { users, cashSessions } from '@/db/schema';
 import { setUser, setSession } from '@/lib/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
-import { useNavigate } from 'react-router-dom';
+import { seedLarge } from '@/db/seed-large';
 
 export default function LoginPage() {
-  // const { login } = useStore(); // Removed
   const navigate = useNavigate();
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('admin');
@@ -17,51 +18,76 @@ export default function LoginPage() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
+
     try {
-      const res = await fetch('http://localhost:3000/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      });
+      // 1. Find user
+      const result = await db.select().from(users).where(eq(users.username, username));
+      const user = result[0];
 
-      if (res.ok) {
-        const user = await res.json();
-        setUser(user);
-
-        // Start Session
-        try {
-          const sessionRes = await fetch('http://localhost:3000/api/sessions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              user_id: user.id,
-              start_time: new Date().toISOString(),
-              opening_balance: 0,
-              status: 'open'
-            })
-          });
-          if (sessionRes.ok) {
-            const session = await sessionRes.json();
-            setSession(session);
-          }
-        } catch (err) {
-          console.error("Failed to start session", err);
-        }
-
-        navigate(user.role === 'cashier' ? '/pos' : '/');
-      } else {
-        const err = await res.json();
-        setError(err.error || 'Login failed');
+      if (!user) {
+        setError('Invalid username or password');
+        return;
       }
+
+      // 2. Check password (simple verification for this demo / MVP)
+      // In production, compare hashed passwords properly (e.g. using potential library if added)
+      if (user.password_hash !== password) {
+        setError('Invalid username or password');
+        return;
+      }
+
+      if (!user.is_active) {
+        setError('Account is disabled');
+        return;
+      }
+
+      // 3. Set User to Local State
+      // Convert nulls to undefined for compatibility with User interface
+      const appUser = {
+        ...user,
+        email: user.email || undefined,
+        role: user.role as any // cast string to UserRole
+      };
+      setUser(appUser);
+
+      // 4. Start Session
+      try {
+        const [newSession] = await db.insert(cashSessions).values({
+          user_id: user.id,
+          start_time: new Date().toISOString(),
+          opening_balance: 0,
+          status: 'open'
+        }).returning();
+
+        const appSession = {
+          ...newSession,
+          end_time: newSession.end_time || undefined,
+          expected_cash_balance: newSession.expected_cash_balance || undefined,
+          actual_cash_balance: newSession.actual_cash_balance || undefined,
+          difference: newSession.difference || undefined,
+          status: newSession.status as any
+        };
+        setSession(appSession);
+      } catch (err) {
+        console.error("Failed to start session", err);
+        // We might want to block login if session fails, or just warn.
+        // For now, proceeding as the original code did (just logged error).
+      }
+
+      // 5. Navigate
+      navigate(user.role === 'cashier' ? '/pos' : '/');
+
     } catch (e) {
-      setError('Connection refused');
+      console.error(e);
+      setError('An unexpected error occurred');
     }
   };
 
   const handleSeed = async () => {
     if (!confirm("Are you sure you want to seed the database? This might reset data.")) return;
     try {
-      await seed();
+      await seedLarge();
       alert("Seeding completed successfully!");
     } catch (err) {
       console.error(err);

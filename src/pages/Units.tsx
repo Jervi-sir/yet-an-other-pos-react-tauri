@@ -1,6 +1,9 @@
 import { useState, useEffect } from "react";
 // import { useStore } from "@/context/StoreContext";
-import { DataTable } from "@/components/DataTable";
+import db from "@/db/database";
+import { productUnits, products } from "@/db/schema";
+import { eq, sql } from "drizzle-orm";
+import { DataTable } from "@/components/data-table";
 import type { ColumnDef } from "@tanstack/react-table";
 import type { ProductUnit } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -11,17 +14,25 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { UnitForm } from "@/components/units/UnitForm";
+import { UnitForm } from "@/components/units/unit-form";
 
 export default function UnitsPage() {
   const [units, setUnits] = useState<ProductUnit[]>([]);
   // const { units } = useStore();
 
-  const fetchUnits = () => {
-    fetch('http://localhost:3000/api/units')
-      .then(res => res.json())
-      .then(setUnits)
-      .catch(console.error);
+  const fetchUnits = async () => {
+    try {
+      const result = await db.select({
+        id: productUnits.id,
+        name: productUnits.name,
+        short_code: productUnits.short_code,
+        // Subquery for usage count
+        product_count: sql<number>`(SELECT count(*) FROM ${products} WHERE ${products.unit_id} = ${productUnits.id})`
+      }).from(productUnits);
+      setUnits(result);
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   useEffect(() => {
@@ -40,19 +51,11 @@ export default function UnitsPage() {
     if (!confirm('Are you sure you want to delete this unit?')) return;
 
     try {
-      const res = await fetch(`http://localhost:3000/api/units/${id}`, {
-        method: 'DELETE'
-      });
-
-      if (res.ok) {
-        fetchUnits();
-      } else {
-        const error = await res.json();
-        alert(error.error || 'Failed to delete');
-      }
+      await db.delete(productUnits).where(eq(productUnits.id, id));
+      fetchUnits();
     } catch (e) {
       console.error(e);
-      alert('Failed to connect to server');
+      alert('Failed to delete. It might be in use.');
     }
   };
 
